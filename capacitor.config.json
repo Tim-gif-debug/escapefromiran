@@ -1,0 +1,12 @@
+{
+  "appId": "com.comicbookhistorians.escapefromiran",
+  "appName": "Escape From Iran",
+  "webDir": "www",
+  "backgroundColor": "#0c0a08",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#0c0a08",
+    "scrollEnabled": false,
+    "allowsLinkPreview": false
+  }
+}

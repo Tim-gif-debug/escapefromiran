@@ -1,0 +1,100 @@
+# Escape From Iran. Builds the iPhone app on Codemagic's Macs and sends it to TestFlight.
+# The repository holds eight files at its top level: index.html, codemagic.yaml, package.json,
+# capacitor.config.json, icon.png, splash.png, privacy.html, support.html.
+# The Xcode project is created fresh on every build. Portrait only, full screen, iPhone only.
+workflows:
+  ios-app-store:
+    name: iOS App Store build
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: Codemagic      # the name of the App Store Connect key under Codemagic > Team integrations
+    environment:
+      vars:
+        BUNDLE_ID: com.comicbookhistorians.escapefromiran
+        APP_VERSION: "1.0"
+      node: 22
+      xcode: latest
+      cocoapods: default
+    cache:
+      cache_paths:
+        - $HOME/signkey
+        - $HOME/.npm
+    scripts:
+      - name: Install dependencies
+        script: |
+          set -e
+          npm install
+      - name: Lay out the web files
+        script: |
+          set -e
+          rm -rf www assets
+          mkdir -p www assets
+          cp index.html www/index.html
+          cp icon.png assets/icon-only.png
+          cp icon.png assets/icon.png
+          cp splash.png assets/splash.png
+          cp splash.png assets/splash-dark.png
+          test -s www/index.html
+      - name: Create the iOS project
+        script: |
+          set -e
+          rm -rf ios
+          npx cap add ios
+          npx capacitor-assets generate --ios --iconBackgroundColor '#0c0a08' --splashBackgroundColor '#0c0a08' --splashBackgroundColorDark '#0c0a08'
+          PLIST=ios/App/App/Info.plist
+          PB=/usr/libexec/PlistBuddy
+          $PB -c "Set :CFBundleDisplayName Escape From Iran" "$PLIST" || $PB -c "Add :CFBundleDisplayName string Escape From Iran" "$PLIST"
+          $PB -c "Delete :UISupportedInterfaceOrientations" "$PLIST" || true
+          $PB -c "Add :UISupportedInterfaceOrientations array" "$PLIST"
+          $PB -c "Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationPortrait" "$PLIST"
+          $PB -c "Delete :UISupportedInterfaceOrientations~ipad" "$PLIST" || true
+          $PB -c "Add :UISupportedInterfaceOrientations~ipad array" "$PLIST"
+          $PB -c "Add :UISupportedInterfaceOrientations~ipad:0 string UIInterfaceOrientationPortrait" "$PLIST"
+          $PB -c "Delete :UIRequiresFullScreen" "$PLIST" || true
+          $PB -c "Add :UIRequiresFullScreen bool true" "$PLIST"
+          $PB -c "Delete :UIStatusBarHidden" "$PLIST" || true
+          $PB -c "Add :UIStatusBarHidden bool true" "$PLIST"
+          $PB -c "Delete :UIViewControllerBasedStatusBarAppearance" "$PLIST" || true
+          $PB -c "Add :UIViewControllerBasedStatusBarAppearance bool false" "$PLIST"
+          $PB -c "Delete :ITSAppUsesNonExemptEncryption" "$PLIST" || true
+          $PB -c "Add :ITSAppUsesNonExemptEncryption bool false" "$PLIST"
+          # iPhone only
+          sed -i '' 's/TARGETED_DEVICE_FAMILY = "1,2";/TARGETED_DEVICE_FAMILY = 1;/g' ios/App/App.xcodeproj/project.pbxproj
+          npx cap sync ios
+      - name: Apply signing
+        script: |
+          set -e
+          keychain initialize
+          # One signing key is kept in the build cache so the same distribution certificate is reused on later builds.
+          mkdir -p "$HOME/signkey"
+          if [ -z "$CERTIFICATE_PRIVATE_KEY" ]; then
+            [ -f "$HOME/signkey/dist.pem" ] || ssh-keygen -t rsa -b 2048 -m PEM -f "$HOME/signkey/dist.pem" -q -N ""
+            export CERTIFICATE_PRIVATE_KEY="$(cat "$HOME/signkey/dist.pem")"
+          fi
+          if ! app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create; then
+            echo ""
+            echo "Signing stopped. If the log above mentions the distribution certificate limit, revoke an older"
+            echo "Distribution certificate at https://developer.apple.com/account/resources/certificates/list"
+            echo "and start this build again."
+            exit 1
+          fi
+          keychain add-certificates
+          xcode-project use-profiles
+      - name: Set version and build number
+        script: |
+          set -e
+          cd ios/App
+          agvtool new-marketing-version "$APP_VERSION"
+          agvtool new-version -all "$BUILD_NUMBER"
+      - name: Build
+        script: |
+          set -e
+          xcode-project build-ipa --workspace ios/App/App.xcworkspace --scheme App
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
